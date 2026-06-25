@@ -157,6 +157,23 @@ app.get('/api/forum', async (req, res) => {
   }
 });
 
+// ─── GET Single Forum Post by ID ───────────────────────────────────────────────
+app.get('/api/forum/:id', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    if (!ObjectId.isValid(postId)) {
+      return res.status(400).json({ error: 'Invalid Post ID' });
+    }
+    const postDetails = await db.collection('forumPosts').findOne({ _id: new ObjectId(postId) });
+    if (!postDetails) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    res.json(postDetails);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── GET Single Class by ID ──────────────────────────────────────────────────
 app.get('/api/classes/:id', async (req, res) => {
   try {
