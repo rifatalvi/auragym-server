@@ -67,8 +67,8 @@ app.get('/api/classes', async (req, res) => {
     const { search, category, page = 1, limit = 6 } = req.query;
 
     // Build dynamic query object
-    // Public route only shows approved classes
-    const query = { status: { $in: ['Approved', 'approved'] } };
+    // Public route only shows approved & open classes
+    const query = { status: { $in: ['Approved', 'approved'] }, isOpen: true };
 
     // 1. Search by Class Name — MongoDB $regex (case-insensitive)
     if (search && search.trim() !== '') {
@@ -113,11 +113,24 @@ app.get('/api/classes', async (req, res) => {
   }
 });
 
-// ─── ADMIN: GET All Classes (Including Pending/Rejected) ─────────────────────
+// ─── ADMIN: GET All Classes with Pagination ──────────────────────────────────
 app.get('/api/admin/classes', async (req, res) => {
   try {
-    const classes = await db.collection('classes').find({}).sort({ createdAt: -1 }).toArray();
-    res.json(classes);
+    const { page = 1, limit = 10 } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const col = db.collection('classes');
+    const total = await col.countDocuments({});
+    const classes = await col.find({}).sort({ createdAt: -1 }).skip(skip).limit(limitNum).toArray();
+
+    res.json({
+      classes,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -129,7 +142,7 @@ app.patch('/api/admin/classes/:id/approve', async (req, res) => {
     const { id } = req.params;
     const result = await db.collection('classes').updateOne(
       { _id: new ObjectId(id) },
-      { $set: { status: 'Approved', updatedAt: new Date() } }
+      { $set: { status: 'Approved', isOpen: true, updatedAt: new Date() } }
     );
     res.json({ message: 'Class approved successfully', result });
   } catch (err) {
@@ -157,6 +170,23 @@ app.delete('/api/admin/classes/:id', async (req, res) => {
     const { id } = req.params;
     const result = await db.collection('classes').deleteOne({ _id: new ObjectId(id) });
     res.json({ message: 'Class deleted successfully', result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: Toggle Class Visibility (Open / Closed) ──────────────────────────
+app.patch('/api/admin/classes/:id/toggle-visibility', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const cls = await db.collection('classes').findOne({ _id: new ObjectId(id) });
+    if (!cls) return res.status(404).json({ error: 'Class not found' });
+    const newIsOpen = !cls.isOpen;
+    await db.collection('classes').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isOpen: newIsOpen, updatedAt: new Date() } }
+    );
+    res.json({ message: newIsOpen ? 'Class is now Open' : 'Class is now Closed', isOpen: newIsOpen });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
