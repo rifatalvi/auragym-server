@@ -859,11 +859,56 @@ app.post('/api/admin/trainer-applications/:id/reject', async (req, res) => {
   }
 });
 
-// ─── ADMIN: GET All Users ────────────────────────────────────────────────────
+// ─── ADMIN: GET All Users (Paginated & Filtered) ─────────────────────────────
 app.get('/api/admin/users', async (req, res) => {
   try {
-    const users = await db.collection('user').find({}).sort({ createdAt: -1 }).toArray();
-    res.json(users);
+    const { page = 1, limit = 10, search = '', role = 'all' } = req.query;
+    
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    
+    const query = {};
+    
+    // Role filter
+    if (role && role !== 'all') {
+      query.role = role;
+    }
+    
+    // Search (Name or Email)
+    if (search && search.trim() !== '') {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      query.$or = [{ name: searchRegex }, { email: searchRegex }];
+    }
+    
+    const usersCol = db.collection('user');
+    
+    // Fetch stats globally (not just for filtered results)
+    const totalUsersCount = await usersCol.countDocuments();
+    const activeUsersCount = await usersCol.countDocuments({ status: { $ne: 'blocked' } });
+    const blockedUsersCount = await usersCol.countDocuments({ status: 'blocked' });
+
+    // Count for pagination
+    const totalMatchingUsers = await usersCol.countDocuments(query);
+    
+    const users = await usersCol
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    res.json({
+      users,
+      totalUsers: totalMatchingUsers,
+      totalPages: Math.ceil(totalMatchingUsers / limitNum),
+      currentPage: pageNum,
+      summaryStats: {
+        total: totalUsersCount,
+        active: activeUsersCount,
+        blocked: blockedUsersCount
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
