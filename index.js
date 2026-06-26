@@ -51,7 +51,7 @@ app.get('/api/featured-classes', async (req, res) => {
   try {
     const classes = await db
       .collection('classes')
-      .find({})
+      .find({ status: { $in: ['Approved', 'approved'] } })
       .sort({ bookingCount: -1 })
       .limit(6)
       .toArray();
