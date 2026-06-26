@@ -67,7 +67,8 @@ app.get('/api/classes', async (req, res) => {
     const { search, category, page = 1, limit = 6 } = req.query;
 
     // Build dynamic query object
-    const query = {};
+    // Public route only shows approved classes
+    const query = { status: { $in: ['Approved', 'approved'] } };
 
     // 1. Search by Class Name — MongoDB $regex (case-insensitive)
     if (search && search.trim() !== '') {
