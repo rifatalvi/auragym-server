@@ -274,6 +274,14 @@ app.post('/api/forum', async (req, res) => {
       return res.status(400).json({ error: 'Title and description are required' });
     }
 
+    // ── Check Soft Block ────────────────────────────────────────────────────────
+    if (authorEmail) {
+      const userDoc = await db.collection('user').findOne({ email: authorEmail });
+      if (userDoc && userDoc.status === 'blocked') {
+        return res.status(403).json({ error: 'Action restricted by Admin' });
+      }
+    }
+
     const newPost = {
       title,
       description,
@@ -522,6 +530,14 @@ app.post('/api/classes/booking', async (req, res) => {
       }
     }
 
+    // ── Check Soft Block ────────────────────────────────────────────────────────
+    if (email) {
+      const userDoc = await db.collection('user').findOne({ email });
+      if (userDoc && userDoc.status === 'blocked') {
+        return res.status(403).json({ error: 'Action restricted by Admin' });
+      }
+    }
+
     // Prevent double booking for the same class by the same user
     const checkUserBooking = await db.collection('bookings').findOne({ classId, $or: [{ userId }, { email }] });
     if (checkUserBooking) {
@@ -658,6 +674,12 @@ app.post('/api/trainer-apply', async (req, res) => {
     const { name, email, experience, specialty, bio } = req.body;
     if (!email || !experience || !specialty) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // ── Check Soft Block ────────────────────────────────────────────────────────
+    const userDoc = await db.collection('user').findOne({ email });
+    if (userDoc && userDoc.status === 'blocked') {
+      return res.status(403).json({ error: 'Action restricted by Admin' });
     }
 
     const col = db.collection('trainerApplications');
@@ -832,6 +854,50 @@ app.post('/api/admin/trainer-applications/:id/reject', async (req, res) => {
     );
 
     res.json({ message: 'Application rejected with feedback.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: GET All Users ────────────────────────────────────────────────────
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const users = await db.collection('user').find({}).sort({ createdAt: -1 }).toArray();
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: Block/Unblock User ───────────────────────────────────────────────
+app.patch('/api/admin/users/:id/block', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'blocked' or 'active'
+    
+    if (status !== 'blocked' && status !== 'active') {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const result = await db.collection('user').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status, updatedAt: new Date() } }
+    );
+    res.json({ message: `User status updated to ${status}`, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: Make Admin ───────────────────────────────────────────────────────
+app.patch('/api/admin/users/:id/make-admin', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.collection('user').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { role: 'admin', updatedAt: new Date() } }
+    );
+    res.json({ message: 'User role updated to admin', result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
