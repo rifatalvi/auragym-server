@@ -787,6 +787,7 @@ app.get('/api/users/:email/stats', async (req, res) => {
       totalFavorites,
       applicationStatus: application ? application.status : null,
       applicationFeedback: application?.feedback || null,
+      userStatus: user?.status || 'active'
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -854,6 +855,23 @@ app.post('/api/admin/trainer-applications/:id/reject', async (req, res) => {
     );
 
     res.json({ message: 'Application rejected with feedback.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: GET Dashboard Stats ──────────────────────────────────────────────
+app.get('/api/admin/stats', async (req, res) => {
+  try {
+    const totalUsers = await db.collection('user').countDocuments();
+    const totalClasses = await db.collection('classes').countDocuments();
+    const totalBookings = await db.collection('bookings').countDocuments();
+
+    res.json({
+      totalUsers,
+      totalClasses,
+      totalBookings
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -934,15 +952,21 @@ app.patch('/api/admin/users/:id/block', async (req, res) => {
   }
 });
 
-// ─── ADMIN: Make Admin ───────────────────────────────────────────────────────
-app.patch('/api/admin/users/:id/make-admin', async (req, res) => {
+// ─── ADMIN: Change User Role ───────────────────────────────────────────────────
+app.patch('/api/admin/users/:id/role', async (req, res) => {
   try {
     const { id } = req.params;
+    const { role } = req.body;
+    
+    if (!['admin', 'trainer', 'user'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
     const result = await db.collection('user').updateOne(
       { _id: new ObjectId(id) },
-      { $set: { role: 'admin', updatedAt: new Date() } }
+      { $set: { role, updatedAt: new Date() } }
     );
-    res.json({ message: 'User role updated to admin', result });
+    res.json({ message: `User role updated to ${role}`, result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
