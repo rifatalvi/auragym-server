@@ -178,14 +178,43 @@ app.get('/api/forum/:id', async (req, res) => {
 app.get('/api/classes/:id', async (req, res) => {
   try {
     const classId = req.params.id;
-    if (!ObjectId.isValid(classId)) {
-      return res.status(400).json({ error: 'Invalid Class ID' });
+    const cls = await db.collection('classes').findOne({ _id: new ObjectId(classId) });
+    if (!cls) return res.status(404).json({ error: 'Class not found' });
+    res.json(cls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST Create New Class ───────────────────────────────────────────────────
+app.post('/api/classes', async (req, res) => {
+  try {
+    const {
+      className, image, category, level, duration, schedule, price, description, trainerEmail
+    } = req.body;
+
+    if (!className || !category || !price) {
+      return res.status(400).json({ error: 'Class name, category, and price are required' });
     }
-    const classDetails = await db.collection('classes').findOne({ _id: new ObjectId(classId) });
-    if (!classDetails) {
-      return res.status(404).json({ error: 'Class not found' });
-    }
-    res.json(classDetails);
+
+    const newClass = {
+      className,
+      name: className, // compatibility
+      image: image || '',
+      category,
+      level: level || 'Beginner',
+      duration: duration || '60 mins',
+      schedule: schedule || { days: [], time: '' },
+      price: Number(price) || 0,
+      description: description || '',
+      trainerEmail: trainerEmail || '',
+      status: 'Pending',
+      bookingCount: 0,
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection('classes').insertOne(newClass);
+    res.status(201).json({ message: 'Class created successfully', id: result.insertedId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -213,7 +242,7 @@ app.get('/api/users/:userId/bookings', async (req, res) => {
 
     // The db schema sometimes uses email as userId or string, handle normally
     const bookings = await db.collection('bookings')
-      .find({ userId })
+      .find({ $or: [{ userId }, { email: userId }, { 'user.email': userId }] })
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -233,6 +262,99 @@ app.get('/api/users/:userId/bookings', async (req, res) => {
     });
 
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET User Payments (Transactions) ────────────────────────────────────────
+app.get('/api/users/:userId/payments', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const payments = await db.collection('payments')
+      .find({ $or: [{ userId }, { userEmail: userId }] })
+      .sort({ paidAt: -1 })
+      .toArray();
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET All Transactions (Admin) ─────────────────────────────────────────────
+app.get('/api/admin/transactions', async (req, res) => {
+  try {
+    const payments = await db.collection('payments')
+      .find({})
+      .sort({ paidAt: -1 })
+      .toArray();
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST Booking (Stripe Success hook) ──────────────────────────────────────
+app.post('/api/classes/booking', async (req, res) => {
+  try {
+    const { amount, classId, classTitle, quantity, email, paymentType, transactionId, paymentStatus, userId } = req.body;
+    
+    // Prevent double booking for the same class by the same user
+    const checkUserBooking = await db.collection('bookings').findOne({ classId, $or: [{ userId }, { email }] });
+    if (checkUserBooking) {
+      return res.status(200).send({ message: 'User has already booked this class' });
+    }
+
+    const bookingData = {
+      classId,
+      classTitle,
+      userId: userId || email, // Prioritize explicit userId
+      email: email,
+      quantity,
+      amount,
+      transactionId,
+      paymentStatus,
+      bookingDate: new Date(),
+      createdAt: new Date(),
+    };
+    
+    const isBookingExist = await db.collection('bookings').findOne({ transactionId });
+    if (isBookingExist) {
+      return res.status(200).send({ message: 'Already paid' });
+    }
+    
+    const bookingRes = await db.collection('bookings').insertOne(bookingData);
+
+    // Update class capacity/booking count
+    await db.collection('classes').updateOne(
+      { _id: new ObjectId(classId) },
+      {
+        $inc: {
+          bookingCount: quantity ? parseInt(quantity) : 1,
+        },
+      }
+    );
+
+    // Upgrade user role to "member" if they are a "user"
+    if (email) {
+      await db.collection('user').updateOne(
+        { email, role: 'user' },
+        { $set: { role: 'member', updatedAt: new Date() } }
+      );
+    }
+
+    const paymentData = {
+      userId: userId || email,
+      userEmail: email,
+      amount,
+      transactionId,
+      paymentStatus,
+      paymentType,
+      paidAt: new Date(),
+    };
+
+    await db.collection('payments').insertOne(paymentData);
+    res.send(bookingRes);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
