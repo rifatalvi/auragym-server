@@ -113,6 +113,55 @@ app.get('/api/classes', async (req, res) => {
   }
 });
 
+// ─── ADMIN: GET All Classes (Including Pending/Rejected) ─────────────────────
+app.get('/api/admin/classes', async (req, res) => {
+  try {
+    const classes = await db.collection('classes').find({}).sort({ createdAt: -1 }).toArray();
+    res.json(classes);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: Approve Class ────────────────────────────────────────────────────
+app.patch('/api/admin/classes/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.collection('classes').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: 'Approved', updatedAt: new Date() } }
+    );
+    res.json({ message: 'Class approved successfully', result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: Reject Class ─────────────────────────────────────────────────────
+app.patch('/api/admin/classes/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.collection('classes').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: 'Rejected', updatedAt: new Date() } }
+    );
+    res.json({ message: 'Class rejected successfully', result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ADMIN: Delete Class ─────────────────────────────────────────────────────
+app.delete('/api/admin/classes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.collection('classes').deleteOne({ _id: new ObjectId(id) });
+    res.json({ message: 'Class deleted successfully', result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── GET Latest 4 Forum Posts ────────────────────────────────────────────────
 app.get('/api/forum/latest', async (req, res) => {
   try {
