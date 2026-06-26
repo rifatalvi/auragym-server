@@ -221,6 +221,55 @@ app.post('/api/classes', async (req, res) => {
   }
 });
 
+// ─── GET Trainer Classes ─────────────────────────────────────────────────────
+app.get('/api/trainer/:email/classes', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const classes = await db.collection('classes').find({ trainerEmail: email }).sort({ createdAt: -1 }).toArray();
+    res.json(classes);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── PUT Update Class ────────────────────────────────────────────────────────
+app.put('/api/classes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = { ...req.body, updatedAt: new Date() };
+    delete updateData._id;
+    const result = await db.collection('classes').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateData }
+    );
+    res.json({ message: 'Class updated', result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DELETE Class ────────────────────────────────────────────────────────────
+app.delete('/api/classes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.collection('classes').deleteOne({ _id: new ObjectId(id) });
+    res.json({ message: 'Class deleted', result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET Class Attendees ─────────────────────────────────────────────────────
+app.get('/api/classes/:id/attendees', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bookings = await db.collection('bookings').find({ classId: id }).toArray();
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── GET Booking Check ───────────────────────────────────────────────────────
 app.get('/api/bookings/check', async (req, res) => {
   try {
