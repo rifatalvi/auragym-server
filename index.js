@@ -265,6 +265,35 @@ app.get('/api/forum/:id', async (req, res) => {
   }
 });
 
+// ─── POST Create Forum Post ──────────────────────────────────────────────────
+app.post('/api/forum', async (req, res) => {
+  try {
+    const { title, description, image, authorName, authorEmail, role } = req.body;
+
+    if (!title || !description) {
+      return res.status(400).json({ error: 'Title and description are required' });
+    }
+
+    const newPost = {
+      title,
+      description,
+      image: image || '',
+      authorName: authorName || 'Unknown',
+      authorEmail: authorEmail || '',
+      role: role || 'Trainer',
+      upvotes: 0,
+      downvotes: 0,
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection('forumPosts').insertOne(newPost);
+    res.status(201).json({ message: 'Forum post created successfully', id: result.insertedId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // ─── GET Single Class by ID ──────────────────────────────────────────────────
 app.get('/api/classes/:id', async (req, res) => {
   try {
