@@ -384,7 +384,7 @@ app.get('/api/trainer/:email/bookings', async (req, res) => {
       return {
         ...b,
         classDetails: cls || null,
-        userDetails: user ? { name: user.name, image: user.image, email: user.email } : null
+        userDetails: user ? { name: user.name, image: user.image, email: user.email, number: user.number || user.phone || "Not Provided" } : null
       };
     }));
 
