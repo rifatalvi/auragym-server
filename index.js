@@ -352,6 +352,48 @@ app.get('/api/trainer/:email/classes', async (req, res) => {
   }
 });
 
+// ─── GET Trainer Bookings (Earnings & Transactions) ────────────────────────
+app.get('/api/trainer/:email/bookings', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    // 1. Find all classes created by this trainer
+    const trainerClasses = await db.collection('classes').find({ trainerEmail: email }).toArray();
+    const classIds = trainerClasses.map(c => c._id.toString());
+    
+    if (classIds.length === 0) {
+      return res.json([]);
+    }
+
+    // 2. Find all bookings for these classes
+    const bookings = await db.collection('bookings')
+      .find({ classId: { $in: classIds } })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    // 3. For each booking, fetch user details
+    const result = await Promise.all(bookings.map(async (b) => {
+      // Find the user who made the booking
+      // userId might be an email or an ObjectId string
+      const user = await db.collection('user').findOne({ 
+        $or: [{ email: b.email }, { email: b.userId }, { _id: new ObjectId(ObjectId.isValid(b.userId) ? b.userId : "000000000000000000000000") }]
+      });
+      
+      const cls = trainerClasses.find(c => c._id.toString() === b.classId);
+      
+      return {
+        ...b,
+        classDetails: cls || null,
+        userDetails: user ? { name: user.name, image: user.image, email: user.email } : null
+      };
+    }));
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── PUT Update Class ────────────────────────────────────────────────────────
 app.put('/api/classes/:id', async (req, res) => {
   try {
