@@ -113,17 +113,28 @@ app.get('/api/classes', async (req, res) => {
   }
 });
 
-// ─── ADMIN: GET All Classes with Pagination ──────────────────────────────────
+// ─── ADMIN: GET All Classes with Pagination + Filters ────────────────────────
 app.get('/api/admin/classes', async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, status, visibility } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
+    const query = {};
+
+    // Filter by status
+    if (status && status !== 'all') {
+      query.status = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+    }
+
+    // Filter by visibility (only meaningful for Approved classes)
+    if (visibility === 'open') query.isOpen = true;
+    if (visibility === 'closed') query.isOpen = { $ne: true };
+
     const col = db.collection('classes');
-    const total = await col.countDocuments({});
-    const classes = await col.find({}).sort({ createdAt: -1 }).skip(skip).limit(limitNum).toArray();
+    const total = await col.countDocuments(query);
+    const classes = await col.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).toArray();
 
     res.json({
       classes,
@@ -270,7 +281,7 @@ app.get('/api/classes/:id', async (req, res) => {
 app.post('/api/classes', async (req, res) => {
   try {
     const {
-      className, image, category, level, duration, schedule, price, description, trainerEmail
+      className, image, category, level, duration, schedule, price, description, trainerEmail, maxStudents
     } = req.body;
 
     if (!className || !category || !price) {
@@ -279,7 +290,7 @@ app.post('/api/classes', async (req, res) => {
 
     const newClass = {
       className,
-      name: className, // compatibility
+      name: className,
       image: image || '',
       category,
       level: level || 'Beginner',
@@ -288,6 +299,7 @@ app.post('/api/classes', async (req, res) => {
       price: Number(price) || 0,
       description: description || '',
       trainerEmail: trainerEmail || '',
+      maxStudents: parseInt(maxStudents) || 20,
       status: 'Pending',
       bookingCount: 0,
       createdAt: new Date(),
@@ -428,6 +440,17 @@ app.post('/api/classes/booking', async (req, res) => {
   try {
     const { amount, classId, classTitle, quantity, email, paymentType, transactionId, paymentStatus, userId } = req.body;
     
+    // ── Check class capacity before allowing booking ──────────────────────────
+    if (classId && ObjectId.isValid(classId)) {
+      const classDoc = await db.collection('classes').findOne({ _id: new ObjectId(classId) });
+      if (classDoc && classDoc.maxStudents) {
+        const currentBookings = classDoc.bookingCount || 0;
+        if (currentBookings >= classDoc.maxStudents) {
+          return res.status(400).json({ error: 'This class is full. No more bookings are allowed.' });
+        }
+      }
+    }
+
     // Prevent double booking for the same class by the same user
     const checkUserBooking = await db.collection('bookings').findOne({ classId, $or: [{ userId }, { email }] });
     if (checkUserBooking) {
