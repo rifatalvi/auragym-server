@@ -2,16 +2,21 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
+const { createRemoteJWKSet, jwtVerify } = require('jose-cjs');
 
 const app = express();
 const port = process.env.PORT;
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+}));
 app.use(express.json());
 
 // ─── MongoDB Connection ───────────────────────────────────────────────────────
 const uri = process.env.MONGO_URI;
-
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -40,6 +45,71 @@ connectDB()
     console.error('❌ Failed to connect to MongoDB:', err);
     process.exit(1);
   });
+
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL || "http://localhost:3000"}/api/auth/jwks`)
+);
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer")) {
+    return res.status(401).send({ message: "Unauthorized access: No token provided" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized access: Invalid token format" });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload;
+    next();
+  } catch (error) {
+    return res.status(401).send({ message: "Unauthorized access: Invalid or expired token" });
+  }
+};
+
+const verifyAdmin = async (req, res, next) => {
+  const user = req.user;
+  if (user?.role !== "admin") {
+    return res.status(403).send({ message: "Forbidden: Admin access required" });
+  }
+  next();
+};
+
+const verifyTrainer = async (req, res, next) => {
+  const user = req.user;
+  
+  let trueRole = user?.role;
+  try {
+      const dbUser = await db.collection('user').findOne({ email: user.email });
+      if (dbUser && dbUser.role) {
+          trueRole = dbUser.role;
+      }
+  } catch (err) {
+      console.error("Failed to fetch user role from DB in verifyTrainer", err);
+  }
+
+  if (trueRole !== "trainer" && trueRole !== "admin") {
+    return res.status(403).send({ message: "Forbidden: Trainer access required" });
+  }
+  next();
+};
+
+const verifyNotBlocked = async (req, res, next) => {
+  const user = req.user;
+  try {
+      const dbUser = await db.collection('user').findOne({ email: user.email });
+      if (dbUser && dbUser.status === 'blocked') {
+          return res.status(403).send({ message: "Action restricted by Admin" });
+      }
+  } catch (err) {
+      console.error("Failed to fetch user block status", err);
+  }
+  next();
+};
 
 // ─── Root Health Check ───────────────────────────────────────────────────────
 app.get('/', (req, res) => {
@@ -114,7 +184,7 @@ app.get('/api/classes', async (req, res) => {
 });
 
 // ─── ADMIN: GET All Classes with Pagination + Filters ────────────────────────
-app.get('/api/admin/classes', async (req, res) => {
+app.get('/api/admin/classes', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, status, visibility } = req.query;
     const pageNum = parseInt(page);
@@ -148,7 +218,7 @@ app.get('/api/admin/classes', async (req, res) => {
 });
 
 // ─── ADMIN: Approve Class ────────────────────────────────────────────────────
-app.patch('/api/admin/classes/:id/approve', async (req, res) => {
+app.patch('/api/admin/classes/:id/approve', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await db.collection('classes').updateOne(
@@ -162,7 +232,7 @@ app.patch('/api/admin/classes/:id/approve', async (req, res) => {
 });
 
 // ─── ADMIN: Reject Class ─────────────────────────────────────────────────────
-app.patch('/api/admin/classes/:id/reject', async (req, res) => {
+app.patch('/api/admin/classes/:id/reject', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await db.collection('classes').updateOne(
@@ -176,7 +246,7 @@ app.patch('/api/admin/classes/:id/reject', async (req, res) => {
 });
 
 // ─── ADMIN: Delete Class ─────────────────────────────────────────────────────
-app.delete('/api/admin/classes/:id', async (req, res) => {
+app.delete('/api/admin/classes/:id', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await db.collection('classes').deleteOne({ _id: new ObjectId(id) });
@@ -187,7 +257,7 @@ app.delete('/api/admin/classes/:id', async (req, res) => {
 });
 
 // ─── ADMIN: Toggle Class Visibility (Open / Closed) ──────────────────────────
-app.patch('/api/admin/classes/:id/toggle-visibility', async (req, res) => {
+app.patch('/api/admin/classes/:id/toggle-visibility', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const cls = await db.collection('classes').findOne({ _id: new ObjectId(id) });
@@ -271,7 +341,7 @@ app.get('/api/forum/:id', async (req, res) => {
 });
 
 // ─── POST Create Forum Post ──────────────────────────────────────────────────
-app.post('/api/forum', async (req, res) => {
+app.post('/api/forum', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const { title, description, image, authorName, authorEmail, role, category } = req.body;
 
@@ -310,7 +380,7 @@ app.post('/api/forum', async (req, res) => {
 
 
 // ─── DELETE Forum Post ───────────────────────────────────────────────────────
-app.delete('/api/forum/:id', async (req, res) => {
+app.delete('/api/forum/:id', verifyToken, async (req, res) => {
   try {
     const postId = req.params.id;
     if (!ObjectId.isValid(postId)) {
@@ -327,7 +397,7 @@ app.delete('/api/forum/:id', async (req, res) => {
 });
 
 // ─── PATCH Approve Forum Post ────────────────────────────────────────────────
-app.patch('/api/forum/:id/approve', async (req, res) => {
+app.patch('/api/forum/:id/approve', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const postId = req.params.id;
     if (!ObjectId.isValid(postId)) {
@@ -344,7 +414,7 @@ app.patch('/api/forum/:id/approve', async (req, res) => {
 });
 
 // ─── PATCH Reject Forum Post ─────────────────────────────────────────────────
-app.patch('/api/forum/:id/reject', async (req, res) => {
+app.patch('/api/forum/:id/reject', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const postId = req.params.id;
     if (!ObjectId.isValid(postId)) {
@@ -361,7 +431,7 @@ app.patch('/api/forum/:id/reject', async (req, res) => {
 });
 
 // ─── GET All Transactions (Admin) ─────────────────────────────────────────────
-app.get('/api/admin/transactions', async (req, res) => {
+app.get('/api/admin/transactions', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const payments = await db.collection('payments')
       .find({})
@@ -399,7 +469,7 @@ app.get('/api/classes/:id', async (req, res) => {
 });
 
 // ─── POST Create New Class ───────────────────────────────────────────────────
-app.post('/api/classes', async (req, res) => {
+app.post('/api/classes', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const {
       className, image, category, level, duration, schedule, price, description, trainerEmail, maxStudents
@@ -434,7 +504,7 @@ app.post('/api/classes', async (req, res) => {
 });
 
 // ─── GET Trainer Classes ─────────────────────────────────────────────────────
-app.get('/api/trainer/:email/classes', async (req, res) => {
+app.get('/api/trainer/:email/classes', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { email } = req.params;
     const classes = await db.collection('classes').find({ trainerEmail: email }).sort({ createdAt: -1 }).toArray();
@@ -445,7 +515,7 @@ app.get('/api/trainer/:email/classes', async (req, res) => {
 });
 
 // ─── GET Trainer Bookings (Earnings & Transactions) ────────────────────────
-app.get('/api/trainer/:email/bookings', async (req, res) => {
+app.get('/api/trainer/:email/bookings', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { email } = req.params;
     
@@ -487,7 +557,7 @@ app.get('/api/trainer/:email/bookings', async (req, res) => {
 });
 
 // ─── PUT Update Class ────────────────────────────────────────────────────────
-app.put('/api/classes/:id', async (req, res) => {
+app.put('/api/classes/:id', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body, updatedAt: new Date() };
@@ -503,7 +573,7 @@ app.put('/api/classes/:id', async (req, res) => {
 });
 
 // ─── DELETE Class ────────────────────────────────────────────────────────────
-app.delete('/api/classes/:id', async (req, res) => {
+app.delete('/api/classes/:id', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await db.collection('classes').deleteOne({ _id: new ObjectId(id) });
@@ -514,7 +584,7 @@ app.delete('/api/classes/:id', async (req, res) => {
 });
 
 // ─── GET Class Attendees ─────────────────────────────────────────────────────
-app.get('/api/classes/:id/attendees', async (req, res) => {
+app.get('/api/classes/:id/attendees', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { id } = req.params;
     const bookings = await db.collection('bookings').find({ classId: id }).toArray();
@@ -543,7 +613,7 @@ app.get('/api/bookings/check', async (req, res) => {
 });
 
 // ─── GET User Bookings (with class details) ──────────────────────────────────
-app.get('/api/users/:userId/bookings', async (req, res) => {
+app.get('/api/users/:userId/bookings', verifyToken, async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -575,7 +645,7 @@ app.get('/api/users/:userId/bookings', async (req, res) => {
 });
 
 // ─── GET User Payments (Transactions) ────────────────────────────────────────
-app.get('/api/users/:userId/payments', async (req, res) => {
+app.get('/api/users/:userId/payments', verifyToken, async (req, res) => {
   try {
     const { userId } = req.params;
     const payments = await db.collection('payments')
@@ -589,7 +659,7 @@ app.get('/api/users/:userId/payments', async (req, res) => {
 });
 
 // ─── POST Booking (Stripe Success hook) ──────────────────────────────────────
-app.post('/api/classes/booking', async (req, res) => {
+app.post('/api/classes/booking', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const { amount, classId, classTitle, quantity, email, paymentType, transactionId, paymentStatus, userId } = req.body;
     
@@ -684,7 +754,7 @@ app.post('/api/classes/booking', async (req, res) => {
 });
 
 // ─── GET User Favorites (with class details) ──────────────────────────────────
-app.get('/api/users/:userId/favorites', async (req, res) => {
+app.get('/api/users/:userId/favorites', verifyToken, async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -728,7 +798,7 @@ app.get('/api/favorites/check', async (req, res) => {
 });
 
 // ─── POST Toggle Favorite ────────────────────────────────────────────────────
-app.post('/api/favorites/toggle', async (req, res) => {
+app.post('/api/favorites/toggle', verifyToken, async (req, res) => {
   try {
     const { classId, userId } = req.body;
     if (!classId || !userId) {
@@ -753,7 +823,7 @@ app.post('/api/favorites/toggle', async (req, res) => {
 });
 
 // ─── POST Apply as Trainer ───────────────────────────────────────────────────
-app.post('/api/trainer-apply', async (req, res) => {
+app.post('/api/trainer-apply', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const { name, email, experience, specialty, bio } = req.body;
     if (!email || !experience || !specialty) {
@@ -854,7 +924,7 @@ app.get('/api/trainer-apply/:email', async (req, res) => {
 });
 
 // ─── GET User Dashboard Stats ────────────────────────────────────────────────
-app.get('/api/users/:email/stats', async (req, res) => {
+app.get('/api/users/:email/stats', verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
 
@@ -888,7 +958,7 @@ app.get('/api/users/:email/stats', async (req, res) => {
 });
 
 // ─── GET All Trainer Applications (admin) ─────────────────────────────────────
-app.get('/api/admin/trainer-applications', async (req, res) => {
+app.get('/api/admin/trainer-applications', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { status } = req.query;
     const query = status ? { status } : {};
@@ -972,7 +1042,7 @@ app.post('/api/admin/trainer-applications/:id/reject', async (req, res) => {
 });
 
 // ─── ADMIN: GET Dashboard Stats ──────────────────────────────────────────────
-app.get('/api/admin/stats', async (req, res) => {
+app.get('/api/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const totalUsers = await db.collection('user').countDocuments();
     const totalClasses = await db.collection('classes').countDocuments();
@@ -989,7 +1059,7 @@ app.get('/api/admin/stats', async (req, res) => {
 });
 
 // ─── ADMIN: GET All Users (Paginated & Filtered) ─────────────────────────────
-app.get('/api/admin/users', async (req, res) => {
+app.get('/api/admin/users', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '', role = 'all' } = req.query;
     
@@ -1044,7 +1114,7 @@ app.get('/api/admin/users', async (req, res) => {
 });
 
 // ─── ADMIN: Block/Unblock User ───────────────────────────────────────────────
-app.patch('/api/admin/users/:id/block', async (req, res) => {
+app.patch('/api/admin/users/:id/block', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body; // 'blocked' or 'active'
@@ -1064,7 +1134,7 @@ app.patch('/api/admin/users/:id/block', async (req, res) => {
 });
 
 // ─── ADMIN: Change User Role ───────────────────────────────────────────────────
-app.patch('/api/admin/users/:id/role', async (req, res) => {
+app.patch('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
@@ -1084,7 +1154,7 @@ app.patch('/api/admin/users/:id/role', async (req, res) => {
 });
 
 // ─── NOTIFICATIONS API ────────────────────────────────────────────────────────
-app.get('/api/notifications/:email', async (req, res) => {
+app.get('/api/notifications/:email', verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
     
@@ -1130,7 +1200,7 @@ app.post('/api/notifications', async (req, res) => {
   }
 });
 
-app.patch('/api/notifications/:id/mark-read', async (req, res) => {
+app.patch('/api/notifications/:id/mark-read', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await db.collection('notifications').updateOne(
