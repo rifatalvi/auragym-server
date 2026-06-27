@@ -227,11 +227,16 @@ app.get('/api/forum', async (req, res) => {
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
+    const query = {};
+    if (req.query.all !== 'true') {
+      query.status = 'Approved';
+    }
+
     const forumCol = db.collection('forumPosts');
-    const totalPosts = await forumCol.countDocuments({});
+    const totalPosts = await forumCol.countDocuments(query);
 
     const posts = await forumCol
-      .find({})
+      .find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
@@ -290,6 +295,7 @@ app.post('/api/forum', async (req, res) => {
       authorName: authorName || 'Unknown',
       authorEmail: authorEmail || '',
       role: role || 'Trainer',
+      status: 'Pending',
       upvotes: 0,
       downvotes: 0,
       createdAt: new Date(),
@@ -302,6 +308,83 @@ app.post('/api/forum', async (req, res) => {
   }
 });
 
+
+// ─── DELETE Forum Post ───────────────────────────────────────────────────────
+app.delete('/api/forum/:id', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    if (!ObjectId.isValid(postId)) {
+      return res.status(400).json({ error: 'Invalid Post ID' });
+    }
+    const result = await db.collection('forumPosts').deleteOne({ _id: new ObjectId(postId) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    res.json({ message: 'Post deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── PATCH Approve Forum Post ────────────────────────────────────────────────
+app.patch('/api/forum/:id/approve', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    if (!ObjectId.isValid(postId)) {
+      return res.status(400).json({ error: 'Invalid Post ID' });
+    }
+    await db.collection('forumPosts').updateOne(
+      { _id: new ObjectId(postId) },
+      { $set: { status: 'Approved' } }
+    );
+    res.json({ message: 'Post approved successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── PATCH Reject Forum Post ─────────────────────────────────────────────────
+app.patch('/api/forum/:id/reject', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    if (!ObjectId.isValid(postId)) {
+      return res.status(400).json({ error: 'Invalid Post ID' });
+    }
+    await db.collection('forumPosts').updateOne(
+      { _id: new ObjectId(postId) },
+      { $set: { status: 'Rejected' } }
+    );
+    res.json({ message: 'Post rejected successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET All Transactions (Admin) ─────────────────────────────────────────────
+app.get('/api/admin/transactions', async (req, res) => {
+  try {
+    const payments = await db.collection('payments')
+      .find({})
+      .sort({ paidAt: -1 })
+      .toArray();
+
+    // Enrich with user photo from user collection
+    const enriched = await Promise.all(payments.map(async (tx) => {
+      const email = tx.userEmail || tx.email;
+      if (email) {
+        const user = await db.collection('user').findOne({ email }, { projection: { image: 1, name: 1 } });
+        if (user) {
+          return { ...tx, userImage: user.image || null, userName: user.name || null };
+        }
+      }
+      return tx;
+    }));
+
+    res.json(enriched);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── GET Single Class by ID ──────────────────────────────────────────────────
 app.get('/api/classes/:id', async (req, res) => {
@@ -449,7 +532,10 @@ app.get('/api/bookings/check', async (req, res) => {
       return res.status(400).json({ error: 'Missing classId or userId' });
     }
 
-    const booking = await db.collection('bookings').findOne({ classId, userId });
+    const booking = await db.collection('bookings').findOne({ 
+      classId, 
+      $or: [{ userId }, { email: userId }] 
+    });
     res.json({ isBooked: !!booking });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -494,19 +580,6 @@ app.get('/api/users/:userId/payments', async (req, res) => {
     const { userId } = req.params;
     const payments = await db.collection('payments')
       .find({ $or: [{ userId }, { userEmail: userId }] })
-      .sort({ paidAt: -1 })
-      .toArray();
-    res.json(payments);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── GET All Transactions (Admin) ─────────────────────────────────────────────
-app.get('/api/admin/transactions', async (req, res) => {
-  try {
-    const payments = await db.collection('payments')
-      .find({})
       .sort({ paidAt: -1 })
       .toArray();
     res.json(payments);
