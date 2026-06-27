@@ -268,7 +268,7 @@ app.get('/api/forum/:id', async (req, res) => {
 // ─── POST Create Forum Post ──────────────────────────────────────────────────
 app.post('/api/forum', async (req, res) => {
   try {
-    const { title, description, image, authorName, authorEmail, role } = req.body;
+    const { title, description, image, authorName, authorEmail, role, category } = req.body;
 
     if (!title || !description) {
       return res.status(400).json({ error: 'Title and description are required' });
@@ -286,6 +286,7 @@ app.post('/api/forum', async (req, res) => {
       title,
       description,
       image: image || '',
+      category: category || 'Motivation',
       authorName: authorName || 'Unknown',
       authorEmail: authorEmail || '',
       role: role || 'Trainer',
