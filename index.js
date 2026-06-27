@@ -667,6 +667,16 @@ app.post('/api/classes/booking', async (req, res) => {
     };
 
     await db.collection('payments').insertOne(paymentData);
+    
+    // Create notification for booking
+    await db.collection('notifications').insertOne({
+      email: email,
+      type: 'booking',
+      message: `Your booking for ${classTitle || 'a class'} was successful.`,
+      read: false,
+      createdAt: new Date()
+    });
+
     res.send(bookingRes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -792,6 +802,15 @@ app.post('/api/trainer-apply', async (req, res) => {
       feedback: null,
       createdAt: new Date(),
     });
+    
+    // Create notification for admin
+    await db.collection('notifications').insertOne({
+      role: 'admin',
+      type: 'trainer_apply',
+      message: `New trainer application from ${name} (${email}).`,
+      read: false,
+      createdAt: new Date()
+    });
 
     res.status(201).json({ message: 'Application submitted successfully!', id: result.insertedId, status: 'Pending' });
   } catch (err) {
@@ -896,11 +915,20 @@ app.post('/api/admin/trainer-applications/:id/approve', async (req, res) => {
       { $set: { status: 'Accepted', updatedAt: new Date() } }
     );
 
-    // Update user role to 'trainer' in better-auth 'user' collection
+    // Update user role to 'trainer'
     await db.collection('user').updateOne(
       { email: application.email },
       { $set: { role: 'trainer', updatedAt: new Date() } }
     );
+
+    // Notification
+    await db.collection('notifications').insertOne({
+      email: application.email,
+      type: 'trainer_status',
+      message: `Congratulations! Your trainer application has been approved.`,
+      read: false,
+      createdAt: new Date()
+    });
 
     res.json({ message: 'Application approved. User role updated to trainer.' });
   } catch (err) {
@@ -927,6 +955,15 @@ app.post('/api/admin/trainer-applications/:id/reject', async (req, res) => {
       { email: application.email },
       { $set: { role: 'user', updatedAt: new Date() } }
     );
+    
+    // Notification
+    await db.collection('notifications').insertOne({
+      email: application.email,
+      type: 'trainer_status',
+      message: `Your trainer application was rejected. ${feedback ? 'Feedback: ' + feedback : ''}`,
+      read: false,
+      createdAt: new Date()
+    });
 
     res.json({ message: 'Application rejected with feedback.' });
   } catch (err) {
@@ -1045,3 +1082,63 @@ app.patch('/api/admin/users/:id/role', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── NOTIFICATIONS API ────────────────────────────────────────────────────────
+app.get('/api/notifications/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    // Notifications for this specific user or role="admin" if user is an admin
+    const user = await db.collection('user').findOne({ email });
+    const query = { $or: [{ email: email }] };
+    if (user && user.role === 'admin') {
+      query.$or.push({ role: 'admin' });
+    }
+    
+    const notifications = await db.collection('notifications')
+      .find(query)
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .toArray();
+      
+    res.json(notifications);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications', async (req, res) => {
+  try {
+    const { email, role, type, message } = req.body;
+    if (!email && !role) {
+      return res.status(400).json({ error: 'Missing target email or role' });
+    }
+    
+    const notification = {
+      email,
+      role,
+      type,
+      message,
+      read: false,
+      createdAt: new Date(),
+    };
+    
+    const result = await db.collection('notifications').insertOne(notification);
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/notifications/:id/mark-read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.collection('notifications').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { read: true } }
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
