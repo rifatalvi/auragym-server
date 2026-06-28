@@ -327,12 +327,30 @@ app.get('/api/forum', async (req, res) => {
     const forumCol = db.collection('forumPosts');
     const totalPosts = await forumCol.countDocuments(query);
 
-    const posts = await forumCol
-      .find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .toArray();
+    const posts = await forumCol.aggregate([
+      { $match: query },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limitNum },
+      {
+        $lookup: {
+          from: 'forumComments',
+          let: { idStr: { $toString: '$_id' } },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$postId', '$$idStr'] } } }
+          ],
+          as: 'comments'
+        }
+      },
+      {
+        $addFields: {
+          commentCount: { $size: '$comments' }
+        }
+      },
+      {
+        $project: { comments: 0 }
+      }
+    ]).toArray();
 
     res.json({
       posts,
