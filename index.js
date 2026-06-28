@@ -221,10 +221,21 @@ app.get('/api/admin/classes', verifyToken, verifyAdmin, async (req, res) => {
 app.patch('/api/admin/classes/:id/approve', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const classDoc = await db.collection('classes').findOne({ _id: new ObjectId(id) });
     const result = await db.collection('classes').updateOne(
       { _id: new ObjectId(id) },
       { $set: { status: 'Approved', isOpen: true, updatedAt: new Date() } }
     );
+    
+    if (classDoc && classDoc.trainerEmail) {
+      await db.collection('notifications').insertOne({
+        email: classDoc.trainerEmail,
+        type: 'class_status',
+        message: `Your class "${classDoc.className || 'Class'}" has been approved.`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
     res.json({ message: 'Class approved successfully', result });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -235,10 +246,21 @@ app.patch('/api/admin/classes/:id/approve', verifyToken, verifyAdmin, async (req
 app.patch('/api/admin/classes/:id/reject', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const classDoc = await db.collection('classes').findOne({ _id: new ObjectId(id) });
     const result = await db.collection('classes').updateOne(
       { _id: new ObjectId(id) },
       { $set: { status: 'Rejected', updatedAt: new Date() } }
     );
+
+    if (classDoc && classDoc.trainerEmail) {
+      await db.collection('notifications').insertOne({
+        email: classDoc.trainerEmail,
+        type: 'class_status',
+        message: `Your class "${classDoc.className || 'Class'}" has been rejected.`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
     res.json({ message: 'Class rejected successfully', result });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -559,10 +581,20 @@ app.patch('/api/forum/:id/approve', verifyToken, verifyAdmin, async (req, res) =
     if (!ObjectId.isValid(postId)) {
       return res.status(400).json({ error: 'Invalid Post ID' });
     }
+    const postDoc = await db.collection('forumPosts').findOne({ _id: new ObjectId(postId) });
     await db.collection('forumPosts').updateOne(
       { _id: new ObjectId(postId) },
       { $set: { status: 'Approved' } }
     );
+    if (postDoc && postDoc.authorEmail) {
+      await db.collection('notifications').insertOne({
+        email: postDoc.authorEmail,
+        type: 'forum_status',
+        message: `Your forum post "${postDoc.title || 'Post'}" has been approved.`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
     res.json({ message: 'Post approved successfully' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -576,10 +608,20 @@ app.patch('/api/forum/:id/reject', verifyToken, verifyAdmin, async (req, res) =>
     if (!ObjectId.isValid(postId)) {
       return res.status(400).json({ error: 'Invalid Post ID' });
     }
+    const postDoc = await db.collection('forumPosts').findOne({ _id: new ObjectId(postId) });
     await db.collection('forumPosts').updateOne(
       { _id: new ObjectId(postId) },
       { $set: { status: 'Rejected' } }
     );
+    if (postDoc && postDoc.authorEmail) {
+      await db.collection('notifications').insertOne({
+        email: postDoc.authorEmail,
+        type: 'forum_status',
+        message: `Your forum post "${postDoc.title || 'Post'}" has been rejected.`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
     res.json({ message: 'Post rejected successfully' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -902,6 +944,20 @@ app.post('/api/classes/booking', verifyToken, verifyNotBlocked, async (req, res)
       read: false,
       createdAt: new Date()
     });
+    
+    // Notify trainer
+    if (classId && ObjectId.isValid(classId)) {
+      const classDoc = await db.collection('classes').findOne({ _id: new ObjectId(classId) });
+      if (classDoc && classDoc.trainerEmail) {
+        await db.collection('notifications').insertOne({
+          email: classDoc.trainerEmail,
+          type: 'booking',
+          message: `A user has booked your class: ${classTitle || classDoc.className}.`,
+          read: false,
+          createdAt: new Date()
+        });
+      }
+    }
 
     res.send(bookingRes);
   } catch (err) {
@@ -1279,10 +1335,22 @@ app.patch('/api/admin/users/:id/block', verifyToken, verifyAdmin, async (req, re
       return res.status(400).json({ error: 'Invalid status' });
     }
 
+    const user = await db.collection('user').findOne({ _id: new ObjectId(id) });
     const result = await db.collection('user').updateOne(
       { _id: new ObjectId(id) },
       { $set: { status, updatedAt: new Date() } }
     );
+    
+    if (user && user.email) {
+      await db.collection('notifications').insertOne({
+        email: user.email,
+        type: 'account_status',
+        message: `Your account has been ${status} by an admin.`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
+
     res.json({ message: `User status updated to ${status}`, result });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1299,10 +1367,22 @@ app.patch('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res
       return res.status(400).json({ error: 'Invalid role' });
     }
 
+    const user = await db.collection('user').findOne({ _id: new ObjectId(id) });
     const result = await db.collection('user').updateOne(
       { _id: new ObjectId(id) },
       { $set: { role, updatedAt: new Date() } }
     );
+    
+    if (user && user.email) {
+      await db.collection('notifications').insertOne({
+        email: user.email,
+        type: 'role_change',
+        message: `Your role has been updated to ${role} by an admin.`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
+
     res.json({ message: `User role updated to ${role}`, result });
   } catch (err) {
     res.status(500).json({ error: err.message });
