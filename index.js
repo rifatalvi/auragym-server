@@ -340,6 +340,162 @@ app.get('/api/forum/:id', async (req, res) => {
   }
 });
 
+// ─── PATCH Toggle Like on Forum Post ─────────────────────────────────────────
+app.patch('/api/forum/:id/like', verifyToken, async (req, res) => {
+  try {
+    const postId = req.params.id;
+    const userEmail = req.user?.email;
+
+    if (!ObjectId.isValid(postId)) {
+      return res.status(400).json({ error: 'Invalid Post ID' });
+    }
+    if (!userEmail) {
+      return res.status(401).json({ error: 'User email not found in token' });
+    }
+
+    const forumCol = db.collection('forumPosts');
+    const post = await forumCol.findOne({ _id: new ObjectId(postId) });
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const likedBy = post.likedBy || [];
+    const alreadyLiked = likedBy.includes(userEmail);
+
+    if (alreadyLiked) {
+      // Unlike: remove user from likedBy, decrement upvotes
+      await forumCol.updateOne(
+        { _id: new ObjectId(postId) },
+        {
+          $pull: { likedBy: userEmail },
+          $inc: { upvotes: -1 },
+        }
+      );
+    } else {
+      // Like: add user to likedBy, increment upvotes
+      await forumCol.updateOne(
+        { _id: new ObjectId(postId) },
+        {
+          $addToSet: { likedBy: userEmail },
+          $inc: { upvotes: 1 },
+        }
+      );
+    }
+
+    const updated = await forumCol.findOne({ _id: new ObjectId(postId) });
+    res.json({
+      upvotes: updated.upvotes ?? 0,
+      liked: !alreadyLiked,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET Comments for a Forum Post ───────────────────────────────────────────
+app.get('/api/forum/:id/comments', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    if (!ObjectId.isValid(postId)) return res.status(400).json({ error: 'Invalid Post ID' });
+
+    const comments = await db.collection('forumComments')
+      .find({ postId })
+      .sort({ createdAt: 1 })
+      .toArray();
+
+    res.json(comments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST Add Comment / Reply ─────────────────────────────────────────────────
+app.post('/api/forum/:id/comments', verifyToken, async (req, res) => {
+  try {
+    const postId = req.params.id;
+    const { content, parentId, authorName } = req.body;
+    const authorEmail = req.user?.email;
+
+    if (!content?.trim()) return res.status(400).json({ error: 'Comment content is required' });
+    if (!ObjectId.isValid(postId)) return res.status(400).json({ error: 'Invalid Post ID' });
+
+    // Fetch role from DB (trusted source, not client)
+    const dbUser = await db.collection('user').findOne({ email: authorEmail });
+    const authorRole = dbUser?.role || req.user?.role || 'user';
+    const resolvedName = authorName || dbUser?.name || req.user?.name || 'Anonymous';
+
+    const comment = {
+      postId,
+      parentId: parentId || null,
+      content: content.trim(),
+      authorEmail,
+      authorName: resolvedName,
+      authorRole,
+      isEdited: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await db.collection('forumComments').insertOne(comment);
+    res.status(201).json({ ...comment, _id: result.insertedId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── PATCH Edit Comment ───────────────────────────────────────────────────────
+app.patch('/api/forum/:id/comments/:commentId', verifyToken, async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const { content } = req.body;
+    const userEmail = req.user?.email;
+
+    if (!ObjectId.isValid(commentId)) return res.status(400).json({ error: 'Invalid comment ID' });
+    if (!content?.trim()) return res.status(400).json({ error: 'Content is required' });
+
+    const comment = await db.collection('forumComments').findOne({ _id: new ObjectId(commentId) });
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    if (comment.authorEmail !== userEmail) return res.status(403).json({ error: 'Forbidden' });
+
+    await db.collection('forumComments').updateOne(
+      { _id: new ObjectId(commentId) },
+      { $set: { content: content.trim(), isEdited: true, updatedAt: new Date() } }
+    );
+
+    res.json({ message: 'Comment updated' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DELETE Comment (cascades to replies) ────────────────────────────────────
+app.delete('/api/forum/:id/comments/:commentId', verifyToken, async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const userEmail = req.user?.email;
+
+    if (!ObjectId.isValid(commentId)) return res.status(400).json({ error: 'Invalid comment ID' });
+
+    const comment = await db.collection('forumComments').findOne({ _id: new ObjectId(commentId) });
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+    // Allow delete if own comment or admin
+    const dbUser = await db.collection('user').findOne({ email: userEmail });
+    if (comment.authorEmail !== userEmail && dbUser?.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Delete comment + all its replies
+    await db.collection('forumComments').deleteMany({
+      $or: [{ _id: new ObjectId(commentId) }, { parentId: commentId }]
+    });
+
+    res.json({ message: 'Comment deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── POST Create Forum Post ──────────────────────────────────────────────────
 app.post('/api/forum', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
