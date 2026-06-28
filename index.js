@@ -50,7 +50,6 @@ connectDB()
 const JWKS = createRemoteJWKSet(
   new URL(`${process.env.CLIENT_URL || "http://localhost:3000"}/api/auth/jwks`)
 );
-
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer")) {
@@ -67,6 +66,7 @@ const verifyToken = async (req, res, next) => {
     req.user = payload;
     next();
   } catch (error) {
+    console.error("JWT verify failed:", error.message, error.code); // ← এই লাইনটা যুক্ত করো
     return res.status(401).send({ message: "Unauthorized access: Invalid or expired token" });
   }
 };
@@ -81,15 +81,15 @@ const verifyAdmin = async (req, res, next) => {
 
 const verifyTrainer = async (req, res, next) => {
   const user = req.user;
-  
+
   let trueRole = user?.role;
   try {
-      const dbUser = await db.collection('user').findOne({ email: user.email });
-      if (dbUser && dbUser.role) {
-          trueRole = dbUser.role;
-      }
+    const dbUser = await db.collection('user').findOne({ email: user.email });
+    if (dbUser && dbUser.role) {
+      trueRole = dbUser.role;
+    }
   } catch (err) {
-      console.error("Failed to fetch user role from DB in verifyTrainer", err);
+    console.error("Failed to fetch user role from DB in verifyTrainer", err);
   }
 
   if (trueRole !== "trainer" && trueRole !== "admin") {
@@ -101,12 +101,12 @@ const verifyTrainer = async (req, res, next) => {
 const verifyNotBlocked = async (req, res, next) => {
   const user = req.user;
   try {
-      const dbUser = await db.collection('user').findOne({ email: user.email });
-      if (dbUser && dbUser.status === 'blocked') {
-          return res.status(403).send({ message: "Action restricted by Admin" });
-      }
+    const dbUser = await db.collection('user').findOne({ email: user.email });
+    if (dbUser && dbUser.status === 'blocked') {
+      return res.status(403).send({ message: "Action restricted by Admin" });
+    }
   } catch (err) {
-      console.error("Failed to fetch user block status", err);
+    console.error("Failed to fetch user block status", err);
   }
   next();
 };
@@ -518,11 +518,11 @@ app.get('/api/trainer/:email/classes', verifyToken, verifyTrainer, async (req, r
 app.get('/api/trainer/:email/bookings', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { email } = req.params;
-    
+
     // 1. Find all classes created by this trainer
     const trainerClasses = await db.collection('classes').find({ trainerEmail: email }).toArray();
     const classIds = trainerClasses.map(c => c._id.toString());
-    
+
     if (classIds.length === 0) {
       return res.json([]);
     }
@@ -537,12 +537,12 @@ app.get('/api/trainer/:email/bookings', verifyToken, verifyTrainer, async (req, 
     const result = await Promise.all(bookings.map(async (b) => {
       // Find the user who made the booking
       // userId might be an email or an ObjectId string
-      const user = await db.collection('user').findOne({ 
+      const user = await db.collection('user').findOne({
         $or: [{ email: b.email }, { email: b.userId }, { _id: new ObjectId(ObjectId.isValid(b.userId) ? b.userId : "000000000000000000000000") }]
       });
-      
+
       const cls = trainerClasses.find(c => c._id.toString() === b.classId);
-      
+
       return {
         ...b,
         classDetails: cls || null,
@@ -602,9 +602,9 @@ app.get('/api/bookings/check', async (req, res) => {
       return res.status(400).json({ error: 'Missing classId or userId' });
     }
 
-    const booking = await db.collection('bookings').findOne({ 
-      classId, 
-      $or: [{ userId }, { email: userId }] 
+    const booking = await db.collection('bookings').findOne({
+      classId,
+      $or: [{ userId }, { email: userId }]
     });
     res.json({ isBooked: !!booking });
   } catch (err) {
@@ -662,7 +662,7 @@ app.get('/api/users/:userId/payments', verifyToken, async (req, res) => {
 app.post('/api/classes/booking', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const { amount, classId, classTitle, quantity, email, paymentType, transactionId, paymentStatus, userId } = req.body;
-    
+
     // ── Check class capacity before allowing booking ──────────────────────────
     if (classId && ObjectId.isValid(classId)) {
       const classDoc = await db.collection('classes').findOne({ _id: new ObjectId(classId) });
@@ -700,12 +700,12 @@ app.post('/api/classes/booking', verifyToken, verifyNotBlocked, async (req, res)
       bookingDate: new Date(),
       createdAt: new Date(),
     };
-    
+
     const isBookingExist = await db.collection('bookings').findOne({ transactionId });
     if (isBookingExist) {
       return res.status(200).send({ message: 'Already paid' });
     }
-    
+
     const bookingRes = await db.collection('bookings').insertOne(bookingData);
 
     // Update class capacity/booking count
@@ -737,7 +737,7 @@ app.post('/api/classes/booking', verifyToken, verifyNotBlocked, async (req, res)
     };
 
     await db.collection('payments').insertOne(paymentData);
-    
+
     // Create notification for booking
     await db.collection('notifications').insertOne({
       email: email,
@@ -872,7 +872,7 @@ app.post('/api/trainer-apply', verifyToken, verifyNotBlocked, async (req, res) =
       feedback: null,
       createdAt: new Date(),
     });
-    
+
     // Create notification for admin
     await db.collection('notifications').insertOne({
       role: 'admin',
@@ -1025,7 +1025,7 @@ app.post('/api/admin/trainer-applications/:id/reject', async (req, res) => {
       { email: application.email },
       { $set: { role: 'user', updatedAt: new Date() } }
     );
-    
+
     // Notification
     await db.collection('notifications').insertOne({
       email: application.email,
@@ -1062,26 +1062,26 @@ app.get('/api/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
 app.get('/api/admin/users', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '', role = 'all' } = req.query;
-    
+
     const pageNum = parseInt(page, 10);
     const limitNum = parseInt(limit, 10);
     const skip = (pageNum - 1) * limitNum;
-    
+
     const query = {};
-    
+
     // Role filter
     if (role && role !== 'all') {
       query.role = role;
     }
-    
+
     // Search (Name or Email)
     if (search && search.trim() !== '') {
       const searchRegex = { $regex: search.trim(), $options: 'i' };
       query.$or = [{ name: searchRegex }, { email: searchRegex }];
     }
-    
+
     const usersCol = db.collection('user');
-    
+
     // Fetch stats globally (not just for filtered results)
     const totalUsersCount = await usersCol.countDocuments();
     const activeUsersCount = await usersCol.countDocuments({ status: { $ne: 'blocked' } });
@@ -1089,7 +1089,7 @@ app.get('/api/admin/users', verifyToken, verifyAdmin, async (req, res) => {
 
     // Count for pagination
     const totalMatchingUsers = await usersCol.countDocuments(query);
-    
+
     const users = await usersCol
       .find(query)
       .sort({ createdAt: -1 })
@@ -1118,7 +1118,7 @@ app.patch('/api/admin/users/:id/block', verifyToken, verifyAdmin, async (req, re
   try {
     const { id } = req.params;
     const { status } = req.body; // 'blocked' or 'active'
-    
+
     if (status !== 'blocked' && status !== 'active') {
       return res.status(400).json({ error: 'Invalid status' });
     }
@@ -1138,7 +1138,7 @@ app.patch('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res
   try {
     const { id } = req.params;
     const { role } = req.body;
-    
+
     if (!['admin', 'trainer', 'user'].includes(role)) {
       return res.status(400).json({ error: 'Invalid role' });
     }
@@ -1157,20 +1157,20 @@ app.patch('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res
 app.get('/api/notifications/:email', verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
-    
+
     // Notifications for this specific user or role="admin" if user is an admin
     const user = await db.collection('user').findOne({ email });
     const query = { $or: [{ email: email }] };
     if (user && user.role === 'admin') {
       query.$or.push({ role: 'admin' });
     }
-    
+
     const notifications = await db.collection('notifications')
       .find(query)
       .sort({ createdAt: -1 })
       .limit(10)
       .toArray();
-      
+
     res.json(notifications);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1183,7 +1183,7 @@ app.post('/api/notifications', async (req, res) => {
     if (!email && !role) {
       return res.status(400).json({ error: 'Missing target email or role' });
     }
-    
+
     const notification = {
       email,
       role,
@@ -1192,7 +1192,7 @@ app.post('/api/notifications', async (req, res) => {
       read: false,
       createdAt: new Date(),
     };
-    
+
     const result = await db.collection('notifications').insertOne(notification);
     res.status(201).json(result);
   } catch (err) {
@@ -1211,4 +1211,4 @@ app.patch('/api/notifications/:id/mark-read', verifyToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+});
