@@ -1407,6 +1407,56 @@ app.patch('/api/admin/users/:id/role', verifyToken, verifyAdmin, async (req, res
   }
 });
 
+// ─── FAVORITES API ─────────────────────────────────────────────────────────────
+app.get('/api/favorites/check', async (req, res) => {
+  try {
+    const { classId, userId } = req.query;
+    if (!classId || !userId) {
+      return res.status(400).json({ error: 'Missing classId or userId' });
+    }
+
+    const favorite = await db.collection('favorites').findOne({
+      classId,
+      $or: [{ userId }, { email: userId }]
+    });
+    res.json({ isFavorited: !!favorite });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/favorites/toggle', verifyToken, async (req, res) => {
+  try {
+    const { classId, userId } = req.body;
+    if (!classId || !userId) {
+      return res.status(400).json({ error: 'Missing classId or userId' });
+    }
+
+    const favoriteCol = db.collection('favorites');
+    const existing = await favoriteCol.findOne({
+      classId,
+      $or: [{ userId }, { email: userId }]
+    });
+
+    if (existing) {
+      // Remove favorite
+      await favoriteCol.deleteOne({ _id: existing._id });
+      res.json({ isFavorited: false, message: 'Removed from favorites' });
+    } else {
+      // Add favorite
+      await favoriteCol.insertOne({
+        classId,
+        userId,
+        email: userId,
+        createdAt: new Date()
+      });
+      res.json({ isFavorited: true, message: 'Added to favorites' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── NOTIFICATIONS API ────────────────────────────────────────────────────────
 app.get('/api/notifications/:email', verifyToken, async (req, res) => {
   try {
