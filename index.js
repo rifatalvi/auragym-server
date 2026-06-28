@@ -401,31 +401,127 @@ app.patch('/api/forum/:id/like', verifyToken, async (req, res) => {
 
     const likedBy = post.likedBy || [];
     const alreadyLiked = likedBy.includes(userEmail);
+    const dislikedBy = post.dislikedBy || [];
+    const alreadyDisliked = dislikedBy.includes(userEmail);
+
+    let updateDoc = { $pull: {}, $addToSet: {}, $inc: {} };
 
     if (alreadyLiked) {
       // Unlike: remove user from likedBy, decrement upvotes
-      await forumCol.updateOne(
-        { _id: new ObjectId(postId) },
-        {
-          $pull: { likedBy: userEmail },
-          $inc: { upvotes: -1 },
-        }
-      );
+      updateDoc.$pull.likedBy = userEmail;
+      updateDoc.$inc.upvotes = -1;
     } else {
       // Like: add user to likedBy, increment upvotes
-      await forumCol.updateOne(
-        { _id: new ObjectId(postId) },
-        {
-          $addToSet: { likedBy: userEmail },
-          $inc: { upvotes: 1 },
-        }
-      );
+      updateDoc.$addToSet.likedBy = userEmail;
+      updateDoc.$inc.upvotes = 1;
+      
+      // If it was already disliked, remove dislike
+      if (alreadyDisliked) {
+        updateDoc.$pull.dislikedBy = userEmail;
+        updateDoc.$inc.downvotes = -1;
+      }
+    }
+
+    // Clean up empty objects in updateDoc
+    if (Object.keys(updateDoc.$pull).length === 0) delete updateDoc.$pull;
+    if (Object.keys(updateDoc.$addToSet).length === 0) delete updateDoc.$addToSet;
+    if (Object.keys(updateDoc.$inc).length === 0) delete updateDoc.$inc;
+
+    await forumCol.updateOne({ _id: new ObjectId(postId) }, updateDoc);
+
+    // Send notification if it was a new like
+    if (!alreadyLiked && post.authorEmail && post.authorEmail !== userEmail) {
+      const dbUser = await db.collection('user').findOne({ email: userEmail });
+      const likerName = dbUser?.name || 'Someone';
+      await db.collection('notifications').insertOne({
+        email: post.authorEmail,
+        type: 'forum_like',
+        message: `${likerName} liked your post "${post.title}".`,
+        read: false,
+        createdAt: new Date()
+      });
     }
 
     const updated = await forumCol.findOne({ _id: new ObjectId(postId) });
     res.json({
       upvotes: updated.upvotes ?? 0,
       liked: !alreadyLiked,
+      downvotes: updated.downvotes ?? 0,
+      disliked: updated.dislikedBy?.includes(userEmail) ?? false,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── PATCH Toggle Dislike on Forum Post ──────────────────────────────────────
+app.patch('/api/forum/:id/dislike', verifyToken, async (req, res) => {
+  try {
+    const postId = req.params.id;
+    const userEmail = req.user?.email;
+
+    if (!ObjectId.isValid(postId)) {
+      return res.status(400).json({ error: 'Invalid Post ID' });
+    }
+    if (!userEmail) {
+      return res.status(401).json({ error: 'User email not found in token' });
+    }
+
+    const forumCol = db.collection('forumPosts');
+    const post = await forumCol.findOne({ _id: new ObjectId(postId) });
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const dislikedBy = post.dislikedBy || [];
+    const alreadyDisliked = dislikedBy.includes(userEmail);
+    const likedBy = post.likedBy || [];
+    const alreadyLiked = likedBy.includes(userEmail);
+
+    let updateDoc = { $pull: {}, $addToSet: {}, $inc: {} };
+
+    if (alreadyDisliked) {
+      // Remove dislike
+      updateDoc.$pull.dislikedBy = userEmail;
+      updateDoc.$inc.downvotes = -1;
+    } else {
+      // Add dislike
+      updateDoc.$addToSet.dislikedBy = userEmail;
+      updateDoc.$inc.downvotes = 1;
+      
+      // If it was already liked, remove like
+      if (alreadyLiked) {
+        updateDoc.$pull.likedBy = userEmail;
+        updateDoc.$inc.upvotes = -1;
+      }
+    }
+
+    // Clean up empty objects in updateDoc
+    if (Object.keys(updateDoc.$pull).length === 0) delete updateDoc.$pull;
+    if (Object.keys(updateDoc.$addToSet).length === 0) delete updateDoc.$addToSet;
+    if (Object.keys(updateDoc.$inc).length === 0) delete updateDoc.$inc;
+
+    await forumCol.updateOne({ _id: new ObjectId(postId) }, updateDoc);
+
+    // Send notification if it was a new dislike
+    if (!alreadyDisliked && post.authorEmail && post.authorEmail !== userEmail) {
+      const dbUser = await db.collection('user').findOne({ email: userEmail });
+      const dislikerName = dbUser?.name || 'Someone';
+      await db.collection('notifications').insertOne({
+        email: post.authorEmail,
+        type: 'forum_dislike',
+        message: `${dislikerName} disliked your post "${post.title}".`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
+
+    const updated = await forumCol.findOne({ _id: new ObjectId(postId) });
+    res.json({
+      downvotes: updated.downvotes ?? 0,
+      disliked: !alreadyDisliked,
+      upvotes: updated.upvotes ?? 0,
+      liked: updated.likedBy?.includes(userEmail) ?? false,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -477,6 +573,19 @@ app.post('/api/forum/:id/comments', verifyToken, async (req, res) => {
     };
 
     const result = await db.collection('forumComments').insertOne(comment);
+
+    // Send notification to post author (if commenter is not the author)
+    const post = await db.collection('forumPosts').findOne({ _id: new ObjectId(postId) });
+    if (post && post.authorEmail && post.authorEmail !== authorEmail) {
+      await db.collection('notifications').insertOne({
+        email: post.authorEmail,
+        type: 'forum_comment',
+        message: `${resolvedName} commented on your post "${post.title}".`,
+        read: false,
+        createdAt: new Date()
+      });
+    }
+
     res.status(201).json({ ...comment, _id: result.insertedId });
   } catch (err) {
     res.status(500).json({ error: err.message });
